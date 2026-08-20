@@ -1,4 +1,4 @@
-import { pipeline, TextStreamer } from "@huggingface/transformers";
+import { pipeline, TextStreamer, env } from "@huggingface/transformers";
 import "./style.css";
 
 const MODEL = "onnx-community/Qwen2.5-0.5B-Instruct";
@@ -18,6 +18,12 @@ const status = document.querySelector("#status");
 const progressWrap = document.querySelector("#progressWrap");
 const progress = document.querySelector("#progress");
 const progressText = document.querySelector("#progressText");
+const errorBox = document.querySelector("#errorBox");
+
+env.useBrowserCache = true;
+env.useWasmCache = true;
+env.useFSCache = false;
+env.cacheKey = "pocket-ai-transformers-v1";
 
 renderMessages();
 
@@ -73,7 +79,7 @@ composer.addEventListener("submit", async (event) => {
     if (last?.role === "assistant") last.content = generated.trim();
     saveMessages();
   } catch (error) {
-    assistant.textContent = `Sorry — the local model could not generate a response.\n\n${error.message}`;
+    assistant.textContent = `Local generation error:\n${formatError(error)}`;
     console.error(error);
   } finally {
     input.disabled = false;
@@ -87,11 +93,22 @@ async function loadModel() {
 
   loadButton.disabled = true;
   progressWrap.hidden = false;
+  errorBox.hidden = true;
+  progress.style.width = "0%";
   status.textContent = "Loading local AI…";
-  progressText.textContent = "Downloading model files…";
+  progressText.textContent = "Checking device and model cache…";
+
+  const hasWebGPU = !!navigator.gpu;
+  const device = hasWebGPU ? "webgpu" : "wasm";
 
   try {
-    const device = "gpu" in navigator ? "webgpu" : "wasm";
+    if (hasWebGPU) {
+      status.textContent = "Local AI · WebGPU";
+      progressText.textContent = "WebGPU detected · preparing model…";
+    } else {
+      status.textContent = "Local AI · CPU fallback";
+      progressText.textContent = "WebGPU unavailable · preparing CPU model…";
+    }
 
     generator = await pipeline("text-generation", MODEL, {
       device,
@@ -104,25 +121,41 @@ async function loadModel() {
         } else if (info.status === "initiate") {
           progressText.textContent = `Downloading ${info.file ?? "model"}…`;
         } else if (info.status === "done") {
-          progressText.textContent = "Preparing model…";
+          progressText.textContent = "File ready · initializing runtime…";
         }
       }
     });
 
-    status.textContent = device === "webgpu"
-      ? "Local AI · WebGPU"
-      : "Local AI · CPU fallback";
-
+    status.textContent = hasWebGPU ? "Local AI · WebGPU" : "Local AI · CPU fallback";
+    progressWrap.hidden = true;
     welcome.hidden = true;
     input.disabled = false;
     send.disabled = false;
     input.focus();
   } catch (error) {
-    status.textContent = "Could not load local AI";
-    progressText.textContent = error.message;
+    generator = null;
+    status.textContent = `Local AI · ${device} failed`;
+    progressText.textContent = "Model downloaded, but initialization failed.";
+    errorBox.textContent = [
+      "INITIALIZATION ERROR",
+      "",
+      formatError(error),
+      "",
+      `Browser: ${navigator.userAgent}`,
+      `WebGPU API: ${hasWebGPU ? "available" : "not available"}`,
+      `Cache API: ${"caches" in window ? "available" : "not available"}`,
+      "",
+      "Send this screen/error text back to us so we can diagnose the iPhone path."
+    ].join("\n");
+    errorBox.hidden = false;
     loadButton.disabled = false;
-    console.error(error);
+    console.error("Pocket AI model initialization failed:", error);
   }
+}
+
+function formatError(error) {
+  if (!error) return "Unknown error";
+  return error.stack || error.message || String(error);
 }
 
 function addMessage(role, content) {
@@ -130,7 +163,6 @@ function addMessage(role, content) {
   bubble.className = `message ${role}`;
   bubble.textContent = content;
   chat.appendChild(bubble);
-
   messages.push({ role, content });
   scrollToBottom();
   return bubble;
