@@ -1,14 +1,14 @@
-# Pocket AI v0.1.1
+# Pocket AI v0.1.2
 
 This is the iPhone debugging build.
 
-Changes from v0.1:
-- Correct WebGPU detection via `navigator.gpu`.
-- Uses Transformers.js browser model cache.
-- Explicitly enables WASM runtime caching.
-- Disables filesystem caching in the browser.
-- Shows the actual model initialization error instead of silently returning to the download screen.
-- Displays whether WebGPU and Cache API are available.
+Changes from v0.1.1:
+- Tests WebGPU with `requestAdapter()` instead of assuming `navigator.gpu` means a usable GPU.
+- Falls back cleanly to WASM when WebGPU is unavailable.
+- Disables Transformers.js Cache API/WASM caching on ordinary LAN HTTP origins where the Cache API is unavailable.
+- Limits ONNX WASM to one thread for Safari/iPhone compatibility.
+- Shows secure-context and WASM-thread diagnostics when initialization fails.
+- Bumps the service-worker shell cache so the iPhone receives the new JavaScript.
 
 The initial download still requires internet. After the model/runtime have been cached, the app is designed to run without a network connection.
 

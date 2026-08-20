@@ -20,10 +20,23 @@ const progress = document.querySelector("#progress");
 const progressText = document.querySelector("#progressText");
 const errorBox = document.querySelector("#errorBox");
 
-env.useBrowserCache = true;
-env.useWasmCache = true;
+// Safari/iPhone can be served from an ordinary LAN HTTP origin (e.g.
+// http://10.0.0.103:5173). In that context the Cache API is unavailable.
+// Transformers.js will otherwise try to use its browser/WASM cache and can
+// fail *after* the model files have finished downloading.
+const cacheAvailable = typeof caches !== "undefined" &&
+  (window.isSecureContext || location.hostname === "localhost" || location.hostname === "127.0.0.1");
+
+env.useBrowserCache = cacheAvailable;
+env.useWasmCache = cacheAvailable;
 env.useFSCache = false;
-env.cacheKey = "pocket-ai-transformers-v1";
+env.cacheKey = "pocket-ai-transformers-v0.1.2";
+
+// Keep the WASM backend conservative on Safari/iPhone. One thread avoids
+// SharedArrayBuffer / worker-related runtime problems on restricted origins.
+if (env.backends?.onnx?.wasm) {
+  env.backends.onnx.wasm.numThreads = 1;
+}
 
 renderMessages();
 
@@ -98,7 +111,7 @@ async function loadModel() {
   status.textContent = "Loading local AI…";
   progressText.textContent = "Checking device and model cache…";
 
-  const hasWebGPU = !!navigator.gpu;
+  const hasWebGPU = await detectWebGPU();
   const device = hasWebGPU ? "webgpu" : "wasm";
 
   try {
@@ -143,13 +156,25 @@ async function loadModel() {
       "",
       `Browser: ${navigator.userAgent}`,
       `WebGPU API: ${hasWebGPU ? "available" : "not available"}`,
-      `Cache API: ${"caches" in window ? "available" : "not available"}`,
+      `Cache API: ${cacheAvailable ? "available" : "not available on this origin"}`,
+      `Secure context: ${window.isSecureContext ? "yes" : "no"}`,
+      `WASM threads: ${env.backends?.onnx?.wasm?.numThreads ?? "default"}`,
       "",
       "Send this screen/error text back to us so we can diagnose the iPhone path."
     ].join("\n");
     errorBox.hidden = false;
     loadButton.disabled = false;
     console.error("Pocket AI model initialization failed:", error);
+  }
+}
+
+async function detectWebGPU() {
+  if (typeof navigator === "undefined" || !navigator.gpu) return false;
+  try {
+    const adapter = await navigator.gpu.requestAdapter();
+    return !!adapter;
+  } catch {
+    return false;
   }
 }
 

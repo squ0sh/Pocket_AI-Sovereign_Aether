@@ -1,4 +1,4 @@
-const CACHE = "pocket-ai-shell-v0.1.1";
+const CACHE = "pocket-ai-shell-v0.1.2";
 const APP_SHELL = ["/", "/index.html", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", event => {
