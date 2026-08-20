@@ -28,3 +28,8 @@ For an actual phone test, use a secure HTTPS deployment or an HTTPS local-develo
 ## Important
 
 The first model download requires internet access. After the model has been downloaded and cached, the goal is for the app to continue working offline. Browser storage policies can vary by device/browser, so the prototype should be tested on the actual iPhone and Android phones we intend to support.
+
+
+Created by: Joshua Rhoads
+
+-Love, Truth, & Justice are the Law
