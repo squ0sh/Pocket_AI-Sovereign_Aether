@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b0c">
+  <meta name="description" content="Private local AI chat">
+  <link rel="manifest" href="/assets/manifest-afeMtjVZ.webmanifest">
+  <link rel="apple-touch-icon" href="/assets/icon-DCDPdjTl.svg">
+  <title>Pocket AI</title>
+  <script type="module" crossorigin src="/assets/index-VN8mcR9t.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-CH2oxxoO.css">
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div>
+      <h1>Pocket AI</h1>
+      <p id="status">Local AI · not loaded</p>
+    </div>
+    <button id="modelButton" class="ghost">Qwen 0.5B</button>
+  </header>
+
+  <main id="chat" class="chat" aria-live="polite">
+    <section id="welcome" class="welcome">
+      <div class="orb">AI</div>
+      <h2>Your AI, on your phone.</h2>
+      <p>The model runs locally in this browser. Download it once, then it can work offline.</p>
+      <button id="loadButton" class="primary">Download AI</button>
+      <div id="progressWrap" class="progress-wrap" hidden>
+        <div class="progress-track"><div id="progress" class="progress"></div></div>
+        <span id="progressText">Preparing…</span>
+      </div>
+      <pre id="errorBox" class="error" hidden></pre>
+    </section>
+  </main>
+
+  <form id="composer" class="composer">
+    <textarea id="input" rows="1" placeholder="Message your AI…" disabled></textarea>
+    <button id="send" class="send" type="submit" disabled aria-label="Send">↑</button>
+  </form>
+</div>
+</body>
+</html>
