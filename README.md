@@ -1,22 +1,35 @@
-# Pocket AI v0.1.2
+# Pocket AI
 
-This is the iPhone debugging build.
+A tiny PWA prototype for running a small language model locally in a phone browser.
 
-Changes from v0.1.1:
-- Tests WebGPU with `requestAdapter()` instead of assuming `navigator.gpu` means a usable GPU.
-- Falls back cleanly to WASM when WebGPU is unavailable.
-- Disables Transformers.js Cache API/WASM caching on ordinary LAN HTTP origins where the Cache API is unavailable.
-- Limits ONNX WASM to one thread for Safari/iPhone compatibility.
-- Shows secure-context and WASM-thread diagnostics when initialization fails.
-- Bumps the service-worker shell cache so the iPhone receives the new JavaScript.
+## Current prototype
 
-The initial download still requires internet. After the model/runtime have been cached, the app is designed to run without a network connection.
+- Vanilla JavaScript
+- PWA installable on iPhone and Android
+- Transformers.js
+- Qwen 2.5 0.5B Instruct
+- Four-bit quantized model
+- WebGPU when available, WASM/CPU fallback
+- Browser-side model caching
+- Chat history stored locally in localStorage
+- No backend and no AI API
 
-Test:
-1. `npm install`
-2. `npm run dev -- --host 0.0.0.0`
-3. Open the shown LAN address on the iPhone.
-4. Tap Download AI.
-5. If it fails after reaching 100%, copy the error shown on screen back to the chat.
+Hugging Face's Transformers.js documentation explicitly supports Qwen2.5-0.5B-Instruct in Q4 with WebGPU.
 
-The model is `onnx-community/Qwen2.5-0.5B-Instruct` with `q4`.
+## Run it
+
+```bash
+npm install
+npm run dev
+```
+
+For an actual phone test, use a secure HTTPS deployment or an HTTPS local-development tunnel. Service workers and WebGPU are browser security features and should be tested in a real mobile browser.
+
+## Important
+
+The first model download requires internet access. After the model has been downloaded and cached, the goal is for the app to continue working offline. Browser storage policies can vary by device/browser, so the prototype should be tested on the actual iPhone and Android phones we intend to support.
+
+
+Created by: Joshua Rhoads
+
+-Love, Truth, & Justice are the Law
