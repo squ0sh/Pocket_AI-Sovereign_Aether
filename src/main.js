@@ -1,11 +1,16 @@
-import { pipeline, TextStreamer, env } from "@huggingface/transformers";
+import {
+  CreateMLCEngine,
+  prebuiltAppConfig,
+} from "@mlc-ai/web-llm";
 import "./style.css";
 
-const MODEL = "onnx-community/Qwen2.5-0.5B-Instruct";
-const STORAGE_KEY = "pocket-ai-messages";
+const STORAGE_KEY = "pocket-ai-messages-v2";
+const MODEL_ID = "Qwen2.5-0.5B-Instruct-q4f16_1-MLC";
 
-let generator = null;
+let engine = null;
+let hardware = null;
 let messages = loadMessages();
+let busy = false;
 
 const chat = document.querySelector("#chat");
 const welcome = document.querySelector("#welcome");
@@ -19,200 +24,428 @@ const progressWrap = document.querySelector("#progressWrap");
 const progress = document.querySelector("#progress");
 const progressText = document.querySelector("#progressText");
 const errorBox = document.querySelector("#errorBox");
-
-// Safari/iPhone can be served from an ordinary LAN HTTP origin (e.g.
-// http://10.0.0.103:5173). In that context the Cache API is unavailable.
-// Transformers.js will otherwise try to use its browser/WASM cache and can
-// fail *after* the model files have finished downloading.
-const cacheAvailable = typeof caches !== "undefined" &&
-  (window.isSecureContext || location.hostname === "localhost" || location.hostname === "127.0.0.1");
-
-env.useBrowserCache = cacheAvailable;
-env.useWasmCache = cacheAvailable;
-env.useFSCache = false;
-env.cacheKey = "pocket-ai-transformers-v0.1.2";
-
-// Keep the WASM backend conservative on Safari/iPhone. One thread avoids
-// SharedArrayBuffer / worker-related runtime problems on restricted origins.
-if (env.backends?.onnx?.wasm) {
-  env.backends.onnx.wasm.numThreads = 1;
-}
+const hardwareBox = document.querySelector("#hardwareBox");
 
 renderMessages();
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js"));
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch((error) => {
+      console.warn("Service worker registration failed:", error);
+    });
+  });
 }
 
 modelButton.addEventListener("click", () => {
-  alert("Version one has one local model: Qwen 2.5 0.5B Instruct, four-bit quantized. Online models can be added later.");
+  const model = prebuiltAppConfig.model_list.find(
+    (item) => item.model_id === MODEL_ID
+  );
+
+  alert(
+    "Pocket AI\n\n" +
+      "Model: " +
+      MODEL_ID +
+      "\n" +
+      "Estimated GPU memory: " +
+      Math.round(model?.vram_required_MB ?? 945) +
+      " MB\n\n" +
+      "WebLLM/MLC runs the model locally through WebGPU. " +
+      "Nothing is sent to OpenAI or another AI API."
+  );
 });
 
 loadButton.addEventListener("click", loadModel);
 
 composer.addEventListener("submit", async (event) => {
   event.preventDefault();
+
   const text = input.value.trim();
-  if (!text || !generator) return;
+
+  if (!text || !engine || busy) {
+    return;
+  }
+
+  busy = true;
 
   input.value = "";
   input.disabled = true;
   send.disabled = true;
 
+  // Add the user's message to our stored conversation.
   addMessage("user", text);
-  const assistant = addMessage("assistant", "");
   saveMessages();
 
+  // Build the conversation WITHOUT the empty assistant UI bubble.
   const conversation = [
-    { role: "system", content: "You are a helpful, concise assistant running locally on a phone. Answer naturally and honestly." },
-    ...messages.slice(-12)
+    {
+      role: "system",
+      content:
+        "You are a helpful, concise assistant running locally on the user's device. Answer naturally and honestly.",
+    },
+    ...messages.slice(-14),
   ];
 
+  // This bubble is only for displaying the response.
+  const assistant = addMessage("assistant", "");
+
   try {
+    const chunks = await engine.chat.completions.create({
+      messages: conversation,
+      temperature: 0.7,
+      top_p: 0.9,
+      max_tokens: 256,
+      stream: true,
+    });
+
     let generated = "";
-    const streamer = new TextStreamer(generator.tokenizer, {
-      skip_prompt: true,
-      skip_special_tokens: true,
-      callback_function: (token) => {
-        generated += token;
+
+    for await (const chunk of chunks) {
+      const delta = chunk.choices?.[0]?.delta?.content ?? "";
+
+      if (delta) {
+        generated += delta;
         assistant.textContent = generated;
         scrollToBottom();
       }
+    }
+
+    // Store the completed assistant response.
+    messages.push({
+      role: "assistant",
+      content: generated.trim(),
     });
 
-    await generator(conversation, {
-      max_new_tokens: 256,
-      do_sample: true,
-      temperature: 0.7,
-      top_p: 0.9,
-      streamer
-    });
-
-    const last = messages[messages.length - 1];
-    if (last?.role === "assistant") last.content = generated.trim();
     saveMessages();
   } catch (error) {
-    assistant.textContent = `Local generation error:\n${formatError(error)}`;
-    console.error(error);
+    const formatted = formatError(error);
+
+    assistant.textContent =
+      "Local generation error:\n" + formatted;
+
+    console.error("Pocket AI generation failed:", error);
+
+    // Don't leave an empty assistant message in localStorage.
+    messages = messages.filter(
+      (message) =>
+        !(message.role === "assistant" && message.content === "")
+    );
+
+    saveMessages();
   } finally {
+    busy = false;
+
     input.disabled = false;
     send.disabled = false;
+
     input.focus();
   }
 });
 
 async function loadModel() {
-  if (generator) return;
+  if (engine) {
+    return;
+  }
 
   loadButton.disabled = true;
   progressWrap.hidden = false;
   errorBox.hidden = true;
-  progress.style.width = "0%";
-  status.textContent = "Loading local AI…";
-  progressText.textContent = "Checking device and model cache…";
 
-  const hasWebGPU = await detectWebGPU();
-  const device = hasWebGPU ? "webgpu" : "wasm";
+  progress.style.width = "0%";
+
+  status.textContent = "Local AI · checking device...";
+  progressText.textContent =
+    "Checking WebGPU and device capabilities...";
 
   try {
-    if (hasWebGPU) {
-      status.textContent = "Local AI · WebGPU";
-      progressText.textContent = "WebGPU detected · preparing model…";
-    } else {
-      status.textContent = "Local AI · CPU fallback";
-      progressText.textContent = "WebGPU unavailable · preparing CPU model…";
+    hardware = await inspectHardware();
+    renderHardware(hardware);
+
+    if (!hardware.secureContext) {
+      throw new Error(
+        "WebGPU requires a secure context (HTTPS). " +
+          "This address is HTTP, so WebLLM cannot access the GPU here. " +
+          "On the iPhone, open Pocket AI over HTTPS before loading the model."
+      );
     }
 
-    generator = await pipeline("text-generation", MODEL, {
-      device,
-      dtype: "q4",
-      progress_callback: (info) => {
-        if (info.status === "progress" && Number.isFinite(info.progress)) {
-          const pct = Math.max(0, Math.min(100, info.progress));
-          progress.style.width = `${pct}%`;
-          progressText.textContent = `${info.file ?? "Model"} · ${Math.round(pct)}%`;
-        } else if (info.status === "initiate") {
-          progressText.textContent = `Downloading ${info.file ?? "model"}…`;
-        } else if (info.status === "done") {
-          progressText.textContent = "File ready · initializing runtime…";
+    if (!hardware.webgpuApi) {
+      throw new Error(
+        "WebGPU is not exposed by this browser. " +
+          "WebLLM requires WebGPU; there is intentionally no ONNX/WASM " +
+          "fallback in this build because that runtime was crashing on iPhone."
+      );
+    }
+
+    if (!hardware.adapter) {
+      throw new Error(
+        "WebGPU is exposed, but Safari could not provide a GPU adapter. " 
++
+          "The browser/device combination cannot run WebLLM right now."
+      );
+    }
+
+    status.textContent =
+      "Local AI · WebGPU · " + hardware.label;
+
+    progressText.textContent =
+      "GPU available · downloading MLC model...";
+
+    engine = await CreateMLCEngine(MODEL_ID, {
+      appConfig: {
+        ...prebuiltAppConfig,
+        cacheBackend: "indexeddb",
+      },
+
+      initProgressCallback: (info) => {
+        if (info?.progress != null) {
+          const pct = Math.max(
+            0,
+            Math.min(100, Number(info.progress) * 100)
+          );
+
+          progress.style.width = pct + "%";
         }
-      }
+
+        progressText.textContent =
+          info?.text || "Preparing local GPU runtime...";
+      },
     });
 
-    status.textContent = hasWebGPU ? "Local AI · WebGPU" : "Local AI · CPU fallback";
-    progressWrap.hidden = true;
+    const vendor = await safeGPUVendor(engine);
+
+    if (vendor) {
+      hardware.vendor = vendor;
+      renderHardware(hardware);
+    }
+
+    status.textContent =
+      "Local AI · WebGPU · " + hardware.label;
+
+    progress.style.width = "100%";
+
+    progressText.textContent =
+      "Ready · model is running on this device.";
+
+    setTimeout(() => {
+      progressWrap.hidden = true;
+    }, 500);
+
     welcome.hidden = true;
+
     input.disabled = false;
     send.disabled = false;
+
     input.focus();
   } catch (error) {
-    generator = null;
-    status.textContent = `Local AI · ${device} failed`;
-    progressText.textContent = "Model downloaded, but initialization failed.";
+    engine = null;
+
+    status.textContent =
+      "Local AI · WebGPU unavailable";
+
+    progressText.textContent =
+      "The GPU runtime could not initialize.";
+
     errorBox.textContent = [
-      "INITIALIZATION ERROR",
+      "WEBLLM / MLC INITIALIZATION ERROR",
       "",
       formatError(error),
       "",
-      `Browser: ${navigator.userAgent}`,
-      `WebGPU API: ${hasWebGPU ? "available" : "not available"}`,
-      `Cache API: ${cacheAvailable ? "available" : "not available on this origin"}`,
-      `Secure context: ${window.isSecureContext ? "yes" : "no"}`,
-      `WASM threads: ${env.backends?.onnx?.wasm?.numThreads ?? "default"}`,
+      "Secure context: " +
+        (hardware?.secureContext ? "yes" : "no"),
+      "WebGPU API: " +
+        (hardware?.webgpuApi ? "available" : "not available"),
+      "GPU adapter: " +
+        (hardware?.adapter ? "available" : "not available"),
+      "Browser: " + navigator.userAgent,
       "",
-      "Send this screen/error text back to us so we can diagnose the iPhone path."
+      "This build uses WebLLM/MLC only. " +
+        "It does not fall back to the ONNX/WASM runtime " +
+        "that was crashing on iPhone.",
     ].join("\n");
+
     errorBox.hidden = false;
+
     loadButton.disabled = false;
-    console.error("Pocket AI model initialization failed:", error);
+
+    console.error(
+      "Pocket AI WebLLM initialization failed:",
+      error
+    );
   }
 }
 
-async function detectWebGPU() {
-  if (typeof navigator === "undefined" || !navigator.gpu) return false;
+async function inspectHardware() {
+  const result = {
+    secureContext: window.isSecureContext,
+    webgpuApi: "gpu" in navigator,
+    adapter: null,
+    vendor: "unknown GPU",
+    label: "WebGPU",
+    maxBuffer: 0,
+    features: [],
+  };
+
+  if (!result.webgpuApi) {
+    return result;
+  }
+
   try {
-    const adapter = await navigator.gpu.requestAdapter();
-    return !!adapter;
+    const adapter = await navigator.gpu.requestAdapter({
+      powerPreference: "high-performance",
+    });
+
+    if (!adapter) {
+      return result;
+    }
+
+    result.adapter = true;
+    result.features = [...adapter.features];
+
+    result.maxBuffer =
+      adapter.limits?.maxStorageBufferBindingSize ?? 0;
+
+    const info = adapter.info;
+
+    const parts = [
+      info?.vendor,
+      info?.architecture,
+      info?.description,
+    ].filter(Boolean);
+
+    if (parts.length) {
+      result.label = parts.join(" · ");
+    }
+  } catch (error) {
+    console.warn(
+      "WebGPU adapter inspection failed:",
+      error
+    );
+  }
+
+  return result;
+}
+
+function renderHardware(info) {
+  if (!info) {
+    return;
+  }
+
+  const maxBufferMB = info.maxBuffer
+    ? Math.round(info.maxBuffer / 1024 / 1024)
+    : 0;
+
+  hardwareBox.textContent = [
+    "Connection: " +
+      (info.secureContext
+        ? "HTTPS / secure"
+        : "HTTP / not secure"),
+
+    "WebGPU API: " +
+      (info.webgpuApi ? "yes" : "no"),
+
+    "GPU adapter: " +
+      (info.adapter ? "yes" : "no"),
+
+    "GPU: " + info.label,
+
+    info.vendor && info.vendor !== "unknown GPU"
+      ? "MLC vendor: " + info.vendor
+      : null,
+
+    maxBufferMB
+      ? "Max storage buffer: " + maxBufferMB + " MB"
+      : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function safeGPUVendor(mlcEngine) {
+  try {
+    return await mlcEngine.getGPUVendor();
   } catch {
-    return false;
+    return "";
   }
 }
 
 function formatError(error) {
-  if (!error) return "Unknown error";
-  return error.stack || error.message || String(error);
+  if (!error) {
+    return "Unknown error";
+  }
+
+  if (error.stack) {
+    return error.stack;
+  }
+
+  if (error.message) {
+    return error.message;
+  }
+
+  return String(error);
 }
 
 function addMessage(role, content) {
   const bubble = document.createElement("div");
-  bubble.className = `message ${role}`;
+
+  bubble.className = "message " + role;
   bubble.textContent = content;
+
   chat.appendChild(bubble);
-  messages.push({ role, content });
+
+  messages.push({
+    role,
+    content,
+  });
+
   scrollToBottom();
+
   return bubble;
 }
 
 function renderMessages() {
   for (const message of messages) {
     const bubble = document.createElement("div");
-    bubble.className = `message ${message.role}`;
+
+    bubble.className = "message " + message.role;
     bubble.textContent = message.content;
+
     chat.appendChild(bubble);
   }
+
   scrollToBottom();
 }
 
 function loadMessages() {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    const stored = localStorage.getItem(STORAGE_KEY);
+
+    if (!stored) {
+      return [];
+    }
+
+    const parsed = JSON.parse(stored);
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter(
+      (message) =>
+        message &&
+        (message.role === "user" ||
+          message.role === "assistant") &&
+        typeof message.content === "string"
+    );
   } catch {
     return [];
   }
 }
 
 function saveMessages() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-100)));
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify(messages.slice(-100))
+  );
 }
 
 function scrollToBottom() {
