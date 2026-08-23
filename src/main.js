@@ -4,18 +4,33 @@ import {
 } from "@mlc-ai/web-llm";
 import "./style.css";
 
-const STORAGE_KEY = "pocket-ai-messages-v2";
-const MODEL_ID = "Qwen2.5-0.5B-Instruct-q4f16_1-MLC";
+const STORAGE_KEY = "pocket-ai-chats-v3";
+const LEGACY_STORAGE_KEY = "pocket-ai-messages-v2";
+const MODEL_STORAGE_KEY = "pocket-ai-selected-model-v1";
+
+const MODEL_OPTIONS = [
+  { id: "Qwen2.5-0.5B-Instruct-q4f16_1-MLC", name: "Qwen 0.5B", tier: "Fast", description: "Smallest option · best for speed and battery." },
+  { id: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC", name: "Qwen 1.5B", tier: "Balanced", description: "More capable while still designed for low-resource devices." },
+  { id: "Qwen2.5-3B-Instruct-q4f16_1-MLC", name: "Qwen 3B", tier: "Powerful", description: "A larger Qwen model for stronger general responses." },
+  { id: "Hermes-3-Llama-3.2-3B-q4f16_1-MLC", name: "Hermes 3 · 3B", tier: "Conversational", description: "3B conversational model with a different personality and behavior." },
+];
+
+let selectedModelId = loadSelectedModel();
 
 let engine = null;
 let hardware = null;
-let messages = loadMessages();
+let chats = loadChats();
+let activeChatId = chats[0]?.id ?? null;
 let busy = false;
+let switchingModel = false;
 
 const chat = document.querySelector("#chat");
 const welcome = document.querySelector("#welcome");
 const loadButton = document.querySelector("#loadButton");
 const modelButton = document.querySelector("#modelButton");
+const modelSheet = document.querySelector("#modelSheet");
+const closeModelButton = document.querySelector("#closeModelButton");
+const modelList = document.querySelector("#modelList");
 const composer = document.querySelector("#composer");
 const input = document.querySelector("#input");
 const send = document.querySelector("#send");
@@ -26,7 +41,17 @@ const progressText = document.querySelector("#progressText");
 const errorBox = document.querySelector("#errorBox");
 const hardwareBox = document.querySelector("#hardwareBox");
 
-renderMessages();
+const menuButton = document.querySelector("#menuButton");
+const closeDrawerButton = document.querySelector("#closeDrawerButton");
+const drawer = document.querySelector("#historyDrawer");
+const drawerBackdrop = document.querySelector("#drawerBackdrop");
+const newChatButton = document.querySelector("#newChatButton");
+const historyList = document.querySelector("#historyList");
+
+updateModelButton();
+renderModelList();
+renderHistory();
+renderActiveChat();
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
@@ -36,27 +61,200 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-modelButton.addEventListener("click", () => {
-  const model = prebuiltAppConfig.model_list.find(
-    (item) => item.model_id === MODEL_ID
-  );
+modelButton.addEventListener("click", openModelSheet);
 
-  alert(
-    "Pocket AI\n\n" +
-      "Model: " +
-      MODEL_ID +
-      "\n" +
-      "Estimated GPU memory: " +
-      Math.round(model?.vram_required_MB ?? 945) +
-      " MB\n\n" +
-      "WebLLM/MLC runs the model locally through WebGPU. " +
-      "Nothing is sent to OpenAI or another AI API."
-  );
+loadButton.addEventListener("click", () => loadModel(selectedModelId));
+closeModelButton.addEventListener("click", closeModelSheet);
+modelSheet.addEventListener("click", (event) => {
+  if (event.target === modelSheet) closeModelSheet();
 });
 
-loadButton.addEventListener("click", loadModel);
+menuButton.addEventListener("click", openDrawer);
+closeDrawerButton.addEventListener("click", closeDrawer);
+drawerBackdrop.addEventListener("click", closeDrawer);
 
-composer.addEventListener("submit", async (event) => {
+newChatButton.addEventListener("click", () => {
+  createNewChat();
+  closeDrawer();
+});
+
+composer.addEventListener("submit", sendMessage);
+
+input.addEventListener("input", () => {
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 130) + "px";
+});
+
+input.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    composer.requestSubmit();
+  }
+});
+
+function getActiveChat() {
+  return chats.find((item) => item.id === activeChatId) ?? null;
+}
+
+function createNewChat() {
+  const now = Date.now();
+
+  const newChat = {
+    id: crypto.randomUUID(),
+    title: "New Chat",
+    createdAt: now,
+    updatedAt: now,
+    messages: [],
+  };
+
+  chats.unshift(newChat);
+  activeChatId = newChat.id;
+
+  saveChats();
+  renderHistory();
+  renderActiveChat();
+
+  if (engine) {
+    input.disabled = false;
+    send.disabled = false;
+    input.focus();
+  }
+}
+
+function selectChat(id) {
+  if (busy) {
+    return;
+  }
+
+  if (!chats.some((item) => item.id === id)) {
+    return;
+  }
+
+  activeChatId = id;
+  saveChats();
+  renderHistory();
+  renderActiveChat();
+  closeDrawer();
+
+  if (engine) {
+    input.disabled = false;
+    send.disabled = false;
+    input.focus();
+  }
+}
+
+function deleteChat(id) {
+  if (busy) {
+    return;
+  }
+
+  const index = chats.findIndex((item) => item.id === id);
+
+  if (index === -1) {
+    return;
+  }
+
+  const deleted = chats[index];
+
+  if (
+    deleted.messages.length > 0 &&
+    !confirm(`Delete "${deleted.title}"?`)
+  ) {
+    return;
+  }
+
+  chats.splice(index, 1);
+
+  if (chats.length === 0) {
+    createNewChat();
+    return;
+  }
+
+  if (activeChatId === id) {
+    activeChatId = chats[0].id;
+  }
+
+  saveChats();
+  renderHistory();
+  renderActiveChat();
+}
+
+function renderHistory() {
+  historyList.replaceChildren();
+
+  if (!chats.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-history";
+    empty.textContent = "No conversations yet.";
+    historyList.appendChild(empty);
+    return;
+  }
+
+  const sorted = [...chats].sort(
+    (a, b) => b.updatedAt - a.updatedAt
+  );
+
+  for (const item of sorted) {
+    const row = document.createElement("div");
+    row.className =
+      "history-item" +
+      (item.id === activeChatId ? " active" : "");
+
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "history-item-main";
+    main.addEventListener("click", () => selectChat(item.id));
+
+    const title = document.createElement("span");
+    title.className = "history-title";
+    title.textContent = item.title || "New Chat";
+
+    const time = document.createElement("span");
+    time.className = "history-time";
+    time.textContent = formatHistoryTime(item.updatedAt);
+
+    main.append(title, time);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "history-delete";
+    remove.setAttribute("aria-label", `Delete ${item.title || "chat"}`);
+    remove.textContent = "×";
+    remove.addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteChat(item.id);
+    });
+
+    row.append(main, remove);
+    historyList.appendChild(row);
+  }
+}
+
+function renderActiveChat() {
+  const active = getActiveChat();
+
+  chat.replaceChildren();
+
+  if (!active || active.messages.length === 0) {
+    chat.appendChild(welcome);
+    welcome.hidden = false;
+    return;
+  }
+
+  welcome.hidden = true;
+
+  for (const message of active.messages) {
+    const bubble = createMessageBubble(
+      message.role,
+      message.content
+    );
+    chat.appendChild(bubble);
+  }
+
+  scrollToBottom();
+}
+
+async function sendMessage(event) {
   event.preventDefault();
 
   const text = input.value.trim();
@@ -65,28 +263,61 @@ composer.addEventListener("submit", async (event) => {
     return;
   }
 
+  let active = getActiveChat();
+
+  if (!active) {
+    createNewChat();
+    active = getActiveChat();
+  }
+
+  if (!active) {
+    return;
+  }
+
   busy = true;
 
   input.value = "";
+  input.style.height = "auto";
   input.disabled = true;
   send.disabled = true;
 
-  // Add the user's message to our stored conversation.
-  addMessage("user", text);
-  saveMessages();
+  const userMessage = {
+    role: "user",
+    content: text,
+  };
 
-  // Build the conversation WITHOUT the empty assistant UI bubble.
+  active.messages.push(userMessage);
+
+  if (active.title === "New Chat") {
+    active.title = makeChatTitle(text);
+  }
+
+  active.updatedAt = Date.now();
+
+  // Render the user's message immediately. The previous version stored it
+  // correctly but forgot to create the visible user bubble.
+  const userBubble = createMessageBubble("user", text);
+  chat.appendChild(userBubble);
+  scrollToBottom();
+
+  saveChats();
+  renderHistory();
+
+  // Build the model context from real stored messages only.
   const conversation = [
     {
       role: "system",
       content:
         "You are a helpful, concise assistant running locally on the user's device. Answer naturally and honestly.",
     },
-    ...messages.slice(-14),
+    ...active.messages.slice(-14),
   ];
 
-  // This bubble is only for displaying the response.
-  const assistant = addMessage("assistant", "");
+  // Visual streaming bubble only. It is never stored as an empty message.
+  const assistant = createMessageBubble("assistant", "");
+  assistant.classList.add("streaming");
+  chat.appendChild(assistant);
+  scrollToBottom();
 
   try {
     const chunks = await engine.chat.completions.create({
@@ -102,35 +333,37 @@ composer.addEventListener("submit", async (event) => {
     for await (const chunk of chunks) {
       const delta = chunk.choices?.[0]?.delta?.content ?? "";
 
-      if (delta) {
-        generated += delta;
-        assistant.textContent = generated;
-        scrollToBottom();
+      if (!delta) {
+        continue;
       }
+
+      generated += delta;
+
+      // WebLLM supplies streamed chunks. The browser paints them
+      // immediately, giving the token-by-token typing effect.
+      assistant.textContent = generated;
+      scrollToBottom();
     }
 
-    // Store the completed assistant response.
-    messages.push({
+    assistant.classList.remove("streaming");
+
+    active.messages.push({
       role: "assistant",
       content: generated.trim(),
     });
 
-    saveMessages();
-  } catch (error) {
-    const formatted = formatError(error);
+    active.updatedAt = Date.now();
 
+    saveChats();
+    renderHistory();
+  } catch (error) {
+    assistant.classList.remove("streaming");
     assistant.textContent =
-      "Local generation error:\n" + formatted;
+      "Local generation error:\n" + formatError(error);
 
     console.error("Pocket AI generation failed:", error);
 
-    // Don't leave an empty assistant message in localStorage.
-    messages = messages.filter(
-      (message) =>
-        !(message.role === "assistant" && message.content === "")
-    );
-
-    saveMessages();
+    saveChats();
   } finally {
     busy = false;
 
@@ -139,138 +372,166 @@ composer.addEventListener("submit", async (event) => {
 
     input.focus();
   }
-});
+}
 
-async function loadModel() {
-  if (engine) {
+function getSelectedModelOption() {
+  return MODEL_OPTIONS.find((item) => item.id === selectedModelId) ?? MODEL_OPTIONS[0];
+}
+
+function updateModelButton() {
+  modelButton.textContent = getSelectedModelOption().name;
+}
+
+function renderModelList() {
+  modelList.replaceChildren();
+  for (const option of MODEL_OPTIONS) {
+    const record = prebuiltAppConfig.model_list.find((item) => item.model_id === option.id);
+    if (!record) continue;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "model-option" + (option.id === selectedModelId ? " active" : "");
+    button.disabled = switchingModel;
+    const main = document.createElement("span");
+    main.className = "model-option-main";
+    const name = document.createElement("span");
+    name.className = "model-option-name";
+    name.textContent = option.name;
+    const description = document.createElement("span");
+    description.className = "model-option-description";
+    description.textContent = option.description;
+    const meta = document.createElement("span");
+    meta.className = "model-option-meta";
+    const memory = Math.round(record.vram_required_MB ?? 0);
+    meta.textContent = memory ? `Estimated GPU memory · ${memory} MB` : "GPU memory estimate unavailable";
+    main.append(name, description, meta);
+    const badge = document.createElement("span");
+    badge.className = "model-option-badge";
+    badge.textContent = option.tier;
+    button.append(main, badge);
+    button.addEventListener("click", () => selectModel(option.id));
+    modelList.appendChild(button);
+  }
+}
+
+function openModelSheet() {
+  renderModelList();
+  modelSheet.classList.add("open");
+  modelSheet.setAttribute("aria-hidden", "false");
+}
+
+function closeModelSheet() {
+  modelSheet.classList.remove("open");
+  modelSheet.setAttribute("aria-hidden", "true");
+}
+
+async function selectModel(modelId) {
+  if (busy || switchingModel) return;
+  if (modelId === selectedModelId && engine) {
+    closeModelSheet();
     return;
   }
+  selectedModelId = modelId;
+  saveSelectedModel();
+  updateModelButton();
+  closeModelSheet();
+  await loadModel(modelId);
+}
+
+async function loadModel(modelId = selectedModelId) {
+  if (busy || switchingModel) return;
+
+  selectedModelId = modelId;
+  saveSelectedModel();
+  updateModelButton();
+  switchingModel = true;
+  renderModelList();
 
   loadButton.disabled = true;
   progressWrap.hidden = false;
   errorBox.hidden = true;
-
   progress.style.width = "0%";
-
-  status.textContent = "Local AI · checking device...";
-  progressText.textContent =
-    "Checking WebGPU and device capabilities...";
+  status.textContent = `Local AI · ${getSelectedModelOption().name} · checking device...`;
+  progressText.textContent = "Checking WebGPU and device capabilities...";
 
   try {
     hardware = await inspectHardware();
     renderHardware(hardware);
 
     if (!hardware.secureContext) {
-      throw new Error(
-        "WebGPU requires a secure context (HTTPS). " +
-          "This address is HTTP, so WebLLM cannot access the GPU here. " +
-          "On the iPhone, open Pocket AI over HTTPS before loading the model."
-      );
+      throw new Error("WebGPU requires a secure context (HTTPS). This address is HTTP, so WebLLM cannot access the GPU here. On the iPhone, open Pocket AI over HTTPS before loading the model.");
     }
 
     if (!hardware.webgpuApi) {
-      throw new Error(
-        "WebGPU is not exposed by this browser. " +
-          "WebLLM requires WebGPU; there is intentionally no ONNX/WASM " +
-          "fallback in this build because that runtime was crashing on iPhone."
-      );
+      throw new Error("WebGPU is not exposed by this browser. WebLLM requires WebGPU; there is intentionally no ONNX/WASM fallback in this build because that runtime was crashing on iPhone.");
     }
 
     if (!hardware.adapter) {
-      throw new Error(
-        "WebGPU is exposed, but Safari could not provide a GPU adapter. " 
-+
-          "The browser/device combination cannot run WebLLM right now."
-      );
+      throw new Error("WebGPU is exposed, but Safari could not provide a GPU adapter. The browser/device combination cannot run WebLLM right now.");
     }
 
-    status.textContent =
-      "Local AI · WebGPU · " + hardware.label;
+    status.textContent = `Local AI · ${getSelectedModelOption().name} · WebGPU · ${hardware.label}`;
+    progressText.textContent = `GPU available · loading ${getSelectedModelOption().name}...`;
 
-    progressText.textContent =
-      "GPU available · downloading MLC model...";
-
-    engine = await CreateMLCEngine(MODEL_ID, {
+    const engineConfig = {
       appConfig: {
         ...prebuiltAppConfig,
         cacheBackend: "indexeddb",
       },
-
       initProgressCallback: (info) => {
         if (info?.progress != null) {
-          const pct = Math.max(
-            0,
-            Math.min(100, Number(info.progress) * 100)
-          );
-
-          progress.style.width = pct + "%";
+          const pct = Math.max(0, Math.min(100, Number(info.progress) * 100));
+          progress.style.width = `${pct}%`;
         }
-
-        progressText.textContent =
-          info?.text || "Preparing local GPU runtime...";
+        progressText.textContent = info?.text || "Preparing local GPU runtime...";
       },
-    });
+    };
+
+    if (engine) {
+      // WebLLM supports switching the loaded model through reload().
+      await engine.reload(selectedModelId);
+    } else {
+      engine = await CreateMLCEngine(selectedModelId, engineConfig);
+    }
 
     const vendor = await safeGPUVendor(engine);
-
     if (vendor) {
       hardware.vendor = vendor;
       renderHardware(hardware);
     }
 
-    status.textContent =
-      "Local AI · WebGPU · " + hardware.label;
-
+    status.textContent = `Local AI · ${getSelectedModelOption().name} · WebGPU · ${hardware.label}`;
     progress.style.width = "100%";
-
-    progressText.textContent =
-      "Ready · model is running on this device.";
-
-    setTimeout(() => {
-      progressWrap.hidden = true;
-    }, 500);
-
+    progressText.textContent = "Ready · model is running on this device.";
+    setTimeout(() => (progressWrap.hidden = true), 500);
     welcome.hidden = true;
-
     input.disabled = false;
     send.disabled = false;
-
     input.focus();
   } catch (error) {
     engine = null;
-
-    status.textContent =
-      "Local AI · WebGPU unavailable";
-
-    progressText.textContent =
-      "The GPU runtime could not initialize.";
-
+    status.textContent = `Local AI · ${getSelectedModelOption().name} · WebGPU unavailable`;
+    progressText.textContent = "The GPU runtime could not initialize.";
     errorBox.textContent = [
       "WEBLLM / MLC INITIALIZATION ERROR",
       "",
       formatError(error),
       "",
-      "Secure context: " +
-        (hardware?.secureContext ? "yes" : "no"),
-      "WebGPU API: " +
-        (hardware?.webgpuApi ? "available" : "not available"),
-      "GPU adapter: " +
-        (hardware?.adapter ? "available" : "not available"),
-      "Browser: " + navigator.userAgent,
+      `Secure context: ${hardware?.secureContext ? "yes" : "no"}`,
+      `WebGPU API: ${hardware?.webgpuApi ? "available" : "not available"}`,
+      `GPU adapter: ${hardware?.adapter ? "available" : "not available"}`,
+      `Model: ${selectedModelId}`,
+      `Browser: ${navigator.userAgent}`,
       "",
-      "This build uses WebLLM/MLC only. " +
-        "It does not fall back to the ONNX/WASM runtime " +
-        "that was crashing on iPhone.",
+      "This build uses WebLLM/MLC only. It does not fall back to the ONNX/WASM runtime that was crashing on iPhone.",
     ].join("\n");
-
     errorBox.hidden = false;
-
     loadButton.disabled = false;
-
-    console.error(
-      "Pocket AI WebLLM initialization failed:",
-      error
-    );
+    console.error("Pocket AI WebLLM initialization failed:", error);
+  } finally {
+    switchingModel = false;
+    loadButton.disabled = !!engine;
+    renderModelList();
+    updateModelButton();
   }
 }
 
@@ -384,67 +645,183 @@ function formatError(error) {
   return String(error);
 }
 
-function addMessage(role, content) {
+function createMessageBubble(role, content) {
   const bubble = document.createElement("div");
 
   bubble.className = "message " + role;
   bubble.textContent = content;
 
-  chat.appendChild(bubble);
-
-  messages.push({
-    role,
-    content,
-  });
-
-  scrollToBottom();
-
   return bubble;
 }
 
-function renderMessages() {
-  for (const message of messages) {
-    const bubble = document.createElement("div");
+function makeChatTitle(text) {
+  const cleaned = text.replace(/\s+/g, " ").trim();
 
-    bubble.className = "message " + message.role;
-    bubble.textContent = message.content;
-
-    chat.appendChild(bubble);
+  if (!cleaned) {
+    return "New Chat";
   }
 
-  scrollToBottom();
+  return cleaned.length > 42
+    ? cleaned.slice(0, 42).trimEnd() + "…"
+    : cleaned;
 }
 
-function loadMessages() {
+function formatHistoryTime(timestamp) {
+  const date = new Date(timestamp);
+  const now = new Date();
+
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+
+  if (sameDay) {
+    return date.toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+
+  const sameYear = date.getFullYear() === now.getFullYear();
+
+  if (sameYear) {
+    return date.toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+    });
+  }
+
+  return date.toLocaleDateString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function openDrawer() {
+  drawer.classList.add("open");
+  drawer.setAttribute("aria-hidden", "false");
+  menuButton.setAttribute("aria-expanded", "true");
+  drawerBackdrop.hidden = false;
+
+  requestAnimationFrame(() => {
+    drawerBackdrop.style.opacity = "1";
+  });
+}
+
+function closeDrawer() {
+  drawer.classList.remove("open");
+  drawer.setAttribute("aria-hidden", "true");
+  menuButton.setAttribute("aria-expanded", "false");
+  drawerBackdrop.hidden = true;
+}
+
+function loadSelectedModel() {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
+    const saved = localStorage.getItem(MODEL_STORAGE_KEY);
+    if (saved && MODEL_OPTIONS.some((option) => option.id === saved)) return saved;
+  } catch (error) {
+    console.warn("Pocket AI selected model could not be loaded:", error);
+  }
+  return MODEL_OPTIONS[0].id;
+}
 
-    if (!stored) {
-      return [];
-    }
-
-    const parsed = JSON.parse(stored);
-
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed.filter(
-      (message) =>
-        message &&
-        (message.role === "user" ||
-          message.role === "assistant") &&
-        typeof message.content === "string"
-    );
-  } catch {
-    return [];
+function saveSelectedModel() {
+  try {
+    localStorage.setItem(MODEL_STORAGE_KEY, selectedModelId);
+  } catch (error) {
+    console.warn("Pocket AI selected model could not be saved:", error);
   }
 }
 
-function saveMessages() {
+function loadChats() {
+  try {
+    const current = localStorage.getItem(STORAGE_KEY);
+
+    if (current) {
+      const parsed = JSON.parse(current);
+
+      if (Array.isArray(parsed)) {
+        return normalizeChats(parsed);
+      }
+    }
+
+    // One-time migration from the previous single-thread storage format.
+    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+
+    if (legacy) {
+      const parsedLegacy = JSON.parse(legacy);
+
+      if (Array.isArray(parsedLegacy) && parsedLegacy.length) {
+        const now = Date.now();
+
+        const migrated = {
+          id: crypto.randomUUID(),
+          title: makeChatTitle(
+            parsedLegacy.find((item) => item.role === "user")?.content ||
+              "Previous Chat"
+          ),
+          createdAt: now,
+          updatedAt: now,
+          messages: parsedLegacy.filter(
+            (message) =>
+              message &&
+              (message.role === "user" ||
+                message.role === "assistant") &&
+              typeof message.content === "string" &&
+              message.content.trim() !== ""
+          ),
+        };
+
+        const result = [migrated];
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify(result)
+        );
+
+        return result;
+      }
+    }
+  } catch (error) {
+    console.warn("Pocket AI chat history could not be loaded:", error);
+  }
+
+  return [
+    {
+      id: crypto.randomUUID(),
+      title: "New Chat",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      messages: [],
+    },
+  ];
+}
+
+function normalizeChats(items) {
+  return items
+    .filter((item) => item && typeof item === "object")
+    .map((item) => ({
+      id: item.id || crypto.randomUUID(),
+      title: item.title || "New Chat",
+      createdAt: Number(item.createdAt) || Date.now(),
+      updatedAt: Number(item.updatedAt) || Date.now(),
+      messages: Array.isArray(item.messages)
+        ? item.messages.filter(
+            (message) =>
+              message &&
+              (message.role === "user" ||
+                message.role === "assistant") &&
+              typeof message.content === "string" &&
+              message.content.trim() !== ""
+          )
+        : [],
+    }));
+}
+
+function saveChats() {
   localStorage.setItem(
     STORAGE_KEY,
-    JSON.stringify(messages.slice(-100))
+    JSON.stringify(chats)
   );
 }
 

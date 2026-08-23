@@ -6,5 +6,12 @@
   "background_color": "#0b0b0c",
   "theme_color": "#0b0b0c",
   "description": "Private local AI chat powered by MLC WebLLM",
-  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
 }
