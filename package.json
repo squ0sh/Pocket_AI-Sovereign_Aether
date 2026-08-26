@@ -1,7 +1,7 @@
 {
   "name":"pocket-ai",
   "private":true,
-  "version":"0.3.0",
+  "version":"0.3.1",
   "type":"module",
   "scripts":{"dev":"vite --host 0.0.0.0","build":"vite build","preview":"vite preview --host 0.0.0.0"},
   "dependencies":{"@mlc-ai/web-llm":"^0.2.84","@vitejs/plugin-basic-ssl":"^2.3.0"},
