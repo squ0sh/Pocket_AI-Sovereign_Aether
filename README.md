@@ -1,5 +1,4 @@
-
-Pocket_AI-Sovereign_Aether/Pocket-AI.jpg
+<img width="1290" height="2348" alt="Pocket-AI" src="https://github.com/user-attachments/assets/f3c67c0e-c4fd-40f1-90c9-448f569b24db" />
 
 
 # Pocket AI 
