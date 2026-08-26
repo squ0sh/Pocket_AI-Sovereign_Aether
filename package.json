@@ -1,10 +1,23 @@
 {
-  "name":"pocket-ai",
-  "private":true,
-  "version":"0.3.1",
-  "type":"module",
-  "scripts":{"dev":"vite --host 0.0.0.0","build":"vite build","preview":"vite preview --host 0.0.0.0"},
-  "dependencies":{"@mlc-ai/web-llm":"^0.2.84","@vitejs/plugin-basic-ssl":"^2.3.0"},
-  "devDependencies":{"vite":"^7.0.0"},
-  "allowScripts":{"esbuild@0.28.2":true,"fsevents@2.3.3":true}
+  "name": "pocket-ai",
+  "private": true,
+  "version": "0.4.2",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "@mlc-ai/web-llm": "0.2.84",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "bitgpu": "0.19.1"
+  },
+  "devDependencies": {
+    "vite": "^7.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "fsevents@2.3.3": true
+  }
 }

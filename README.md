@@ -1,58 +1,34 @@
-# Pocket AI — v0.3.2
+# Pocket AI — v0.4.2
+
+## Current model lineup
+
+- **Qwen 0.5B** — MLC/WebLLM known-good baseline.
+- **Bonsai 1.7B Q1** — browser-native bitgpu 1-bit WebGPU runtime; confirmed working on iPhone.
+- **Bonsai 4B Q1** — larger 1-bit Bonsai experiment using the same bitgpu runtime; published model data is about 570 MB.
+
+Qwen3 1.7B is intentionally omitted from this build while we continue testing the Bonsai 1-bit models.
 
 ## Current build
 
-Pocket AI is a browser-local PWA using MLC/WebLLM and WebGPU. Qwen 0.5B remains the known-good baseline. Bonsai 1.7B Q1 is an experimental custom model.
+Pocket AI is a browser-local PWA that runs models directly on the device GPU. It does not require a server or API key.
 
-## Version history
+### v0.4.2 — Bonsai 4B experiment
+- Kept **Qwen 0.5B** as the known-good WebLLM baseline.
+- Kept the working **Bonsai 1.7B Q1** bitgpu integration unchanged.
+- Added **Bonsai 4B Q1** using bitgpu 0.19.1's published Bonsai 4B GGUF manifest and auxiliary data.
+- Removed **Qwen3 1.7B** from the selector for now.
+- Uses a 2048-token context and q8 KV cache for both Bonsai models as the initial iPhone experiment.
+- Bumped the model-selection storage key and service-worker cache so an older Qwen3 selection/cache cannot silently persist into this build.
 
-### v0.2.0 — WebLLM/WebGPU foundation
-- Local browser inference through MLC/WebLLM.
-- WebGPU capability detection.
-- PWA-oriented chat interface.
-
-### v0.2.1 — iPhone/Safari reliability
-- HTTPS development configuration.
-- WebGPU diagnostics.
-- IndexedDB model caching.
-- Qwen 0.5B as the known-good local model.
-
-### v0.3.0 — Model selector
-- Qwen 0.5B retained as the fallback.
-- Added Bonsai experimental model selection.
-
-### v0.3.1 — Bonsai Q1 experiment
-- Switched the experimental Bonsai entry to Bonsai 1.7B Q1.
-- Added generation diagnostics.
-- Reduced the first browser test to a small context/prefill configuration.
-
-### v0.3.2 — Correct custom ModelRecord
-- Registers the Bonsai Q1 `ModelRecord` alongside the prebuilt WebLLM models.
-- Fixes the `findModelRecord` initialization failure.
-- Uses the correct Bonsai Q1 WebGPU WASM library.
-- Keeps Qwen 0.5B on the stock WebLLM path.
-- Uses a 64-token first-generation test.
+The bitgpu project documents ready-made manifests for Bonsai 1.7B, 4B, and 8B, with the weights streamed from Hugging Face and processed locally in the browser.
 
 ## Models
 
-| Model | Status | Runtime requirement |
-|---|---|---|
-| Qwen 0.5B | Known-good fallback | Stock WebLLM 0.2.84 |
-| Bonsai 1.7B Q1 | Experimental | Bonsai `bonsai_q1_f32` runtime support |
-
-## Bonsai Q1 configuration
-
-The model is registered using the published configuration from the Bonsai Q1 MLC artifact:
-
-- Model ID: `Bonsai-1.7B-q1-MLC`
-- Model artifact: `welcoma/Bonsai-1.7B-bonsai_q1_f32-MLC`
-- WebGPU library: `libs/bonsai-q1-1.7b-bonsai_q1_f32-webgpu.wasm`
-- Browser smoke-test context: 4096
-- Browser smoke-test prefill: 512
-
-This build initially overrides those to **2048 context / 128 prefill** to reduce pressure on an iPhone.
-
-The artifact author states that Bonsai Q1 requires a patched MLC/WebLLM runtime with the custom `bonsai_q1_f32` path. It is not expected to work with an unmodified upstream WebLLM runtime.
+| Model | Runtime | Status | Approximate first download |
+|---|---|---|---|
+| Qwen 0.5B | MLC/WebLLM | Known-good baseline | small |
+| Bonsai 1.7B Q1 | bitgpu/WebGPU | Confirmed working | ~240–290 MB class |
+| Bonsai 4B Q1 | bitgpu/WebGPU | Experimental | ~570 MB class |
 
 ## Run
 
@@ -63,22 +39,46 @@ npm run dev
 
 Open the HTTPS Vite address on the iPhone.
 
-## Testing
+## Important
 
-1. Load Qwen 0.5B first if you want to verify the baseline.
-2. Select **Bonsai 1.7B Q1**.
-3. Load the model.
-4. Try `hello` or `Say only: ready`.
-5. If initialization fails, the UI displays the WebLLM/MLC stack trace. If generation fails after successful initialization, the UI keeps the generation error visible for diagnosis.
+The first time a model is used, its weights are downloaded and cached by the browser. The application itself does not need a model server.
 
-## Important limitation
+Switching models after one is loaded reloads the PWA so the WebGPU runtime is cleanly recreated.
 
-A successful custom `ModelRecord` registration does not by itself provide the Bonsai Q1 runtime. The WebGPU WASM contains the compiled model library, but the runtime must understand the `bonsai_q1_f32` quantization path.
+## Version history
 
-## References
+### v0.4.2 — Bonsai 4B experiment
+- Added Bonsai 4B Q1 through bitgpu.
+- Removed Qwen3 1.7B from the active selector.
+- Preserved the working Bonsai 1.7B Q1 path.
 
-Bonsai Q1 artifact:
-https://huggingface.co/welcoma/Bonsai-1.7B-bonsai_q1_f32-MLC
+### v0.4.1 — bitgpu Bonsai + Qwen3 1.7B
+- Bonsai 1.7B moved to bitgpu.
+- Added Qwen3 1.7B as an experiment.
+- Fixed the bitgpu integration import: `createEngine` from `bitgpu` and `createChat` from `bitgpu/chat`.
+- Updated browser cache version and added detailed generation diagnostics.
 
-WebLLM custom-model documentation:
-https://llm.mlc.ai/docs/deploy/webllm.html
+### v0.3.2 — Correct custom ModelRecord
+- Registered the Bonsai Q1 `ModelRecord` alongside the prebuilt WebLLM models.
+- Fixed the `findModelRecord` initialization failure.
+- Used the correct Bonsai Q1 WebGPU WASM library.
+
+### v0.3.1 — Bonsai Q1 experiment
+- Switched the experimental Bonsai entry to Bonsai 1.7B Q1.
+- Added generation diagnostics.
+- Reduced the first browser test to a small context/prefill configuration.
+
+### v0.3.0 — Model selector
+- Qwen 0.5B retained as the fallback.
+- Added Bonsai experimental model selection.
+
+### v0.2.1 — iPhone/Safari reliability
+- HTTPS development configuration.
+- WebGPU diagnostics.
+- IndexedDB model caching.
+- Qwen 0.5B as the known-good local model.
+
+### v0.2.0 — WebLLM/WebGPU foundation
+- Local browser inference through MLC/WebLLM.
+- WebGPU capability detection.
+- PWA-oriented chat interface.
