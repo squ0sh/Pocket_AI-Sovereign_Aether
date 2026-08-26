@@ -11,18 +11,13 @@
   "dependencies": {
     "@mlc-ai/web-llm": "0.2.84",
     "@vitejs/plugin-basic-ssl": "^2.3.0",
-    "bitgpu": "0.19.1",
-    "firebase": "^12.18.0",
-    "firebase-tools": "^14.23.0"
+    "bitgpu": "0.19.1"
   },
   "devDependencies": {
     "vite": "^7.0.0"
   },
   "allowScripts": {
     "esbuild@0.28.2": true,
-    "fsevents@2.3.3": true,
-    "@firebase/util@1.15.3": true,
-    "protobufjs@7.6.5": true,
-    "re2@1.26.1": true
+    "fsevents@2.3.3": true
   }
 }

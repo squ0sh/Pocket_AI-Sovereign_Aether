@@ -26,7 +26,7 @@ const MODELS = [
       "https://huggingface.co/onnx-community/Bonsai-1.7B-ONNX/resolve/main/tokenizer.json",
     tokenizerConfigUrl:
       "https://huggingface.co/onnx-community/Bonsai-1.7B-ONNX/resolve/main/tokenizer_config.json",
-    maxSeqLen: 2048,
+    maxSeqLen: 4096,
     kvCache: "q8",
   },
   {
@@ -45,7 +45,7 @@ const MODELS = [
       "https://huggingface.co/onnx-community/Bonsai-4B-ONNX/resolve/main/tokenizer.json",
     tokenizerConfigUrl:
       "https://huggingface.co/onnx-community/Bonsai-4B-ONNX/resolve/main/tokenizer_config.json",
-    maxSeqLen: 2048,
+    maxSeqLen: 4096,
     kvCache: "q8",
   },
   {
@@ -65,7 +65,7 @@ const MODELS = [
       "https://huggingface.co/onnx-community/Bonsai-8B-ONNX/resolve/main/tokenizer.json",
     tokenizerConfigUrl:
       "https://huggingface.co/onnx-community/Bonsai-8B-ONNX/resolve/main/tokenizer_config.json",
-    maxSeqLen: 4096,
+    maxSeqLen: 8192,
     kvCache: "q8",
   },
 ];
